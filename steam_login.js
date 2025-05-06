@@ -1,7 +1,7 @@
-import puppeteer from 'puppeteer';
-import { promises as fs } from 'fs';
+const puppeteer = require('puppeteer');
+const fs = require('fs').promises;
 
-export async function getCookies() {
+async function getCookies() {
   const browser = await puppeteer.launch({
     headless: false,
     defaultViewport: null,
@@ -15,7 +15,7 @@ export async function getCookies() {
 
   // read credentials
   const { username, password } =
-    JSON.parse(await fs.readFile('LoginInfo.json', 'utf8'));
+    JSON.parse(await fs.readFile('login_info.json', 'utf8'));
 
   // wait for and type into the form
   await page.waitForSelector('input[type="text"]', { visible: true });
@@ -39,9 +39,11 @@ export async function getCookies() {
   await new Promise(resolve => setTimeout(resolve, 2000));
   
   // grab cookies
-  const cookies = await page.browserContext().cookies();
-  console.log(JSON.stringify(cookies, null, 2));
   page.close()
+  // returns the browser with the appropriate cookies
   return browser;
 }
 
+module.exports = { getCookies };
+
+getCookies()
