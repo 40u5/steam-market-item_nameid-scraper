@@ -45,5 +45,3 @@ async function getCookies() {
 }
 
 module.exports = { getCookies };
-
-getCookies()
