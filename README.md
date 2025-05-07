@@ -32,8 +32,8 @@ These IDs can be used with Steam’s public API to fetch price data, market acti
   Specify any Steam AppID in `settings.json` to scrape different games.  
 - **Pagination Handling**  
   Automatically detect and iterate through all market pages.  
-- **JSON Output**  
-  Appends each record as `{ hash_name, item_nameid }` to a JSON file for easy analysis.
+- **CSV Output**  
+  Appends each record as `hash_name in column1 and item_nameid in column2` to a JSON file for easy analysis.
 
 ---
 
