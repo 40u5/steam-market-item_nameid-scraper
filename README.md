@@ -33,7 +33,7 @@ These IDs can be used with Steam’s public API to fetch price data, market acti
 - **Pagination Handling**  
   Automatically detect and iterate through all market pages.  
 - **CSV Output**  
-  Appends each record as `hash_name in column1 and item_nameid in column2` to a JSON file for easy analysis.
+  Appends each record with `hash_name` in column 1 and `item_nameid` in column 2 to a CSV file for easy analysis.
 
 ---
 
