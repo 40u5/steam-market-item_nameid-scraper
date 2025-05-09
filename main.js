@@ -3,102 +3,131 @@ const fs = require('fs');
 const { getCookies } = require('./steam_login.js');
 const { gameId: appId, outputFile } = settings;
 
-function getLastPage(page) {
-  return page.evaluate(() => {
-    const spans = Array.from(
-      document.querySelectorAll('span.market_paging_pagelink')
-    );
-    const nums = spans
-      .map(s => parseInt(s.textContent.trim(), 10))
-      .filter(n => !isNaN(n));
-    return nums.length ? nums[nums.length - 1] : NaN;
-  });
+const PERPAGE = 10;
+
+// gets the number of pages in the steam market for a game
+function getLastPage(totalCount) {
+  return Math.ceil(totalCount / PERPAGE);
 }
 
+/* takes page and the current page number and returns an array of 
+all the links in the page*/
+async function collectPageLinks(page, pageNum) {
+  const start = (pageNum - 1) * PERPAGE;  // zero-based offset
+  const url   =
+    `https://steamcommunity.com/market/search/render/` +
+    `?appid=${appId}` +
+    `&start=${start}` +
+    `&count=${PERPAGE}` +
+    `&search_descriptions=0` +
+    `&sort_column=quantity` +
+    `&sort_dir=desc` +
+    `&norender=1`;
+
+  // hit the JSON endpoint
+  const resp = await page.goto(url, { waitUntil: 'networkidle2' });
+  const json = await resp.json();
+  if (!json.success) {
+    throw new Error(`Steam API error: ${json.tip}`);
+  }
+
+  // build array of full listing URLs
+  const links = [];
+  for (const item of json.results) {
+    const hashName = encodeURIComponent(item.hash_name);
+    const listingUrl =
+      `https://steamcommunity.com/market/listings/` +
+      `${appId}/${hashName}`;
+    links.push(listingUrl);
+  }
+
+  console.log(`we on page ${pageNum}: found ${links.length} items`);
+  return links;
+}
+
+/* takes a browser instance and the url of the listing, opens a new page and
+gets the item_nameid of the item, then closes the page*/
+async function scrapeItem(page, itemUrl) {
+  await page.setExtraHTTPHeaders({
+    Referer: 'https://steamcommunity.com/market',
+    'User-Agent': 'did it work??',
+  });
+
+  // Navigate with throttling only on 429
+  await handleTooManyRequests(page, () =>
+    page.goto(itemUrl)
+  );
+
+  // Wait for the XHR containing item_nameid
+  const resp = await page.waitForResponse(r => r.url().includes('item_nameid='));
+  const url = resp.url()
+  const m = url.match(/item_nameid=(\d+)/);
+  const itemId = m ? m[1] : null;
+  const hashName = itemUrl.replace(`https://steamcommunity.com/market/listings/${appId}/`, '');
+  console.log(hashName + ', ' + itemId)
+  return { hashName, itemId };
+}
+
+async function handleTooManyRequests(page, navigateFn) {
+  let resp = await navigateFn();
+  while (resp.status() === 429) {
+    console.log('[429] Cooling off 10 s and reloading …');
+    await new Promise(r => setTimeout(r, 10000));
+    resp = await page.reload({ waitUntil: 'networkidle2' });
+  }
+  return resp
+}
+
+// main function
 (async () => {
-    const browser = await getCookies()
-    const page = await browser.newPage();
-    const headers = {
-        "Referer": 'https://steamcommunity.com/market',
-        "User-Agent": 'did it work??',
+  const browser = await getCookies();
+  const mainPage = await browser.newPage();
+  await mainPage.setExtraHTTPHeaders({
+    Referer: 'https://steamcommunity.com/market',
+    'User-Agent': 'did it work??',
+  });
+
+  // Create write stream
+  const writeStream = fs.createWriteStream(outputFile + '.csv', { flags: 'w' });
+  writeStream.write("hash_name,item_nameid\n");
+
+  // Determine total number of pages
+  const firstUrl = `https://steamcommunity.com/market/search/render/` +
+                   `?appid=${appId}` +
+                   `&start=0&count=${PERPAGE}` +
+                   `&search_descriptions=0` +
+                   `&sort_column=quantity&sort_dir=desc` +
+                   `&norender=1`;
+
+  const firstResp = await handleTooManyRequests(mainPage, () =>
+    mainPage.goto(firstUrl, { waitUntil: 'networkidle2' })
+  );
+  const firstJson = await firstResp.json();
+  if (!firstJson.success) {
+    throw new Error(`Initial Steam API error: ${firstJson.tip}`);
+  }
+
+  const totalPages = getLastPage(firstJson.total_count);
+
+  // Iterate over each market listing page
+  for (let currentPage = 1; currentPage <= totalPages; currentPage++) {
+    try {
+      const links = await collectPageLinks(mainPage, currentPage);
+
+      for (const link of links) {
+        try {
+          const { hashName, itemId } = await scrapeItem(mainPage, link);
+          const itemLine = `${hashName},${itemId}\n`;
+          const success = writeStream.write(itemLine);
+          if (!success) console.warn('Backpressure hit while writing:', itemLine);
+        } catch (err) {
+          console.error('Error scraping item:', err);
+        }
+      }
+    } catch (err) {
+      console.error(`Failed to process page ${currentPage}:`, err);
     }
-
-    //creates write stream to write to the csv file
-    const writeStream = fs.createWriteStream(outputFile + '.csv', { flags: 'a' });
-    writeStream.write("hash_name, item_nameid")
-    let firstPath = `https://steamcommunity.com/market/search?appid=${appId}&sort_column=quantity#p1_quantity_desc`;
-    await page.goto(firstPath, { waitUntil: 'networkidle2' });
-    const totalPages = await getLastPage(page);
-
-    for (let pages = 1; pages <= totalPages; pages++)
-    {
-        var url = `https://steamcommunity.com/market/search?appid=${appId}&sort_column=quantity#p${pages}_quantity_desc`;
-        var links = [];
-        await page.setExtraHTTPHeaders(headers);
-        var redirect = await page.goto(url);
-        try{
-            if (pages != totalPages)
-            {
-                await page.waitForSelector('#result_9', { timeout: 5000 });
-            }
-            else {
-                const maxIndex = await page.$$eval('[id^="result_"]', elems => {
-                    const nums = elems
-                      .map(el => {
-                        const m = el.id.match(/^result_(\d+)$/);
-                        return m ? parseInt(m[1], 10) : null;
-                      })
-                      .filter(n => n !== null);
-                    return nums.length ? Math.max(...nums) : -1;
-                  });
-                  await page.waitForSelector(`#result_${maxIndex}`, { timeout: 5000 });
-            }
-        }catch(error)
-        {
-            //keeps refreshing main webpage if too many requests sent
-            while (redirect.status() == 429)
-            {
-                await new Promise(resolve => setTimeout(resolve, 10000));
-                redirect = await page.reload();
-                console.log('Too many requests, refreshed the page');
-            }
-        }
-
-        // gets the total number of listings on the current page
-        const elements = await page.$$('.market_listing_row_link');
-        for (let i = 0; i < elements.length; i++)
-        {
-            const linkHref = await (await elements[i].getProperty('href')).jsonValue();
-            links[i] = linkHref;
-        }
-
-        // scrapes the main webpage
-        for (let i = 0; i < links.length; i++)
-        {
-            await page.setExtraHTTPHeaders(headers);
-            var follow_url = await page.goto(links[i]);
-
-            // keeps refreshing listing page if too many requests sent
-            while (follow_url.status() == 429)
-            {
-                await new Promise(resolve => setTimeout(resolve, 10000));
-                follow_url = await page.reload();
-                console.log('Too many requests, refreshed the page');
-            }
-            let resp = await page.waitForResponse(r => r.url().includes('item_nameid'));
-            const url = resp.url();
-            let m = url.match(/item_nameid=(\d+)/);
-            const item_id = m ? m[1] : null;
-            const hash_name = follow_url.url().replace(`https://steamcommunity.com/market/listings/${appId}/`, '');
-            const item_information = '\n' + hash_name + ',' + item_id + ',';
-
-            // writes to the file
-            let isWritable = writeStream.write(item_information);
-            if (!isWritable) {
-                console.log('could not write: ' + item_information);
-            }
-            console.log(item_id);
-        }
-    }
-    writeStream.end();
+  }
+  writeStream.end();
+  await browser.close();
 })();
