@@ -41,7 +41,7 @@ These IDs can be used with Steam’s public API to fetch price data, market acti
 
 - **Node.js** v14.0.0 or higher  
 - **npm** (bundled with Node.js)  
-- A valid Steam account with Market access
+- A valid Steam account
 
 ---
 
@@ -53,21 +53,34 @@ These IDs can be used with Steam’s public API to fetch price data, market acti
    cd steam-item-nameid-scraper
 
 ## Configuration
-
-1. **Add steam credentials to `LoginInfo.json`** in the project root  
-   ```json
-   {
-     "username": "YOUR_STEAM_USERNAME",
-     "password": "YOUR_STEAM_PASSWORD"
-   }
-2. **Edit `settings.json`** to set your target game id and file output options
+**Edit `settings.json`** to set your target game id and file output options
     ```json
     {
-        "appId": "730",            // Example: 730 = CS2
-        "outputFile": "items.json" // Default output filename
+        "appId": "730",
+        "outputFolder": "output",
+        "parallelTabs": 10
     }
 
+⚠️ WARNING: Increasing parallelTabs speeds things up, but setting the
+value too high can exhaust Chromium’s memory and crash the browser.
+
 ---
+
+## Usage
+
+### 1. First‑time setup (all platforms)
+
+```bash
+# inside the project folder run
+main.bat
+```
+A Chrome window launches via Puppeteer so you can log in visually.
+
+Enter your Steam username and password when prompted. They are saved to login_info.json, so future runs skip the prompt unless you delete the file.
+
+If Steam Guard 2‑factor authentication is enabled, approve the sign‑in on your mobile authenticator.
+
+
 
 ## 🤝 Contributing
 

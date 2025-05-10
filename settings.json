@@ -1,4 +1,5 @@
 {
     "gameId": 730, 
-    "outputFile": "output"
+    "outputFolder": "output", 
+    "parallelTabs": 10
 }

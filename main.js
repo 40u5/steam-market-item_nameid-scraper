@@ -1,24 +1,23 @@
 const settings = require('./settings.json');
 const fs = require('fs');
 const { getCookies } = require('./steam_login.js');
-const { gameId: appId, outputFile } = settings;
-
-const PERPAGE = 15;
+const { gameId: appId, outputFolder, parallelTabs } = settings;
+const path = require('path');
 
 // gets the number of pages in the steam market for a game
 function getLastPage(totalCount) {
-  return Math.ceil(totalCount / PERPAGE);
+  return Math.ceil(totalCount / parallelTabs);
 }
 
 /* takes page and the current page number and returns an array of 
 all the links in the page*/
 async function collectPageLinks(page, pageNum) {
-  const start = pageNum * PERPAGE;
+  const start = pageNum * parallelTabs;
   const url   =
     `https://steamcommunity.com/market/search/render/` +
     `?appid=${appId}` +
     `&start=${start}` +
-    `&count=${PERPAGE}` +
+    `&count=${parallelTabs}` +
     `&search_descriptions=0` +
     `&sort_column=quantity` +
     `&sort_dir=desc` +
@@ -88,12 +87,15 @@ async function handleTooManyRequests(page, navigateFn) {
   });
 
   // Prepare CSV writer
-  const writeStream = fs.createWriteStream(outputFile + '.csv', { flags: 'w' });
+const writeStream = fs.createWriteStream(
+  path.join(outputFolder, `${appId}_output.csv`),
+  { flags: 'w' }
+);
   writeStream.write("hash_name,item_nameid\n");
 
   // Prime total_count
   const firstUrl = `https://steamcommunity.com/market/search/render/` +
-                   `?appid=${appId}&start=0&count=${PERPAGE}` +
+                   `?appid=${appId}&start=0&count=${parallelTabs}` +
                    `&search_descriptions=0&sort_column=quantity&sort_dir=desc` +
                    `&norender=1`;
   const firstResp = await handleTooManyRequests(mainPage, () =>
@@ -104,7 +106,7 @@ async function handleTooManyRequests(page, navigateFn) {
 
   // Pre-allocate your page-pool
   const itemPages = [];
-  for (let i = 0; i < PERPAGE; i++) {
+  for (let i = 0; i < parallelTabs; i++) {
     const p = await browser.newPage();
     await p.setExtraHTTPHeaders({
       Referer: 'https://steamcommunity.com/market',
