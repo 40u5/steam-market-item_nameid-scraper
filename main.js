@@ -3,7 +3,7 @@ const fs = require('fs');
 const { getCookies } = require('./steam_login.js');
 const { gameId: appId, outputFile } = settings;
 
-const PERPAGE = 10;
+const PERPAGE = 15;
 
 // gets the number of pages in the steam market for a game
 function getLastPage(totalCount) {
@@ -13,7 +13,7 @@ function getLastPage(totalCount) {
 /* takes page and the current page number and returns an array of 
 all the links in the page*/
 async function collectPageLinks(page, pageNum) {
-  const start = (pageNum - 1) * PERPAGE;  // zero-based offset
+  const start = pageNum * PERPAGE;
   const url   =
     `https://steamcommunity.com/market/search/render/` +
     `?appid=${appId}` +
@@ -79,55 +79,66 @@ async function handleTooManyRequests(page, navigateFn) {
 }
 
 // main function
-(async () => {
-  const browser = await getCookies();
+;(async () => {
+  const browser  = await getCookies();
   const mainPage = await browser.newPage();
   await mainPage.setExtraHTTPHeaders({
     Referer: 'https://steamcommunity.com/market',
     'User-Agent': 'did it work??',
   });
 
-  // Create write stream
+  // Prepare CSV writer
   const writeStream = fs.createWriteStream(outputFile + '.csv', { flags: 'w' });
   writeStream.write("hash_name,item_nameid\n");
 
-  // Determine total number of pages
+  // Prime total_count
   const firstUrl = `https://steamcommunity.com/market/search/render/` +
-                   `?appid=${appId}` +
-                   `&start=0&count=${PERPAGE}` +
-                   `&search_descriptions=0` +
-                   `&sort_column=quantity&sort_dir=desc` +
+                   `?appid=${appId}&start=0&count=${PERPAGE}` +
+                   `&search_descriptions=0&sort_column=quantity&sort_dir=desc` +
                    `&norender=1`;
-
   const firstResp = await handleTooManyRequests(mainPage, () =>
     mainPage.goto(firstUrl, { waitUntil: 'networkidle2' })
   );
   const firstJson = await firstResp.json();
-  if (!firstJson.success) {
-    throw new Error(`Initial Steam API error: ${firstJson.tip}`);
-  }
-
   const totalPages = getLastPage(firstJson.total_count);
 
-  // Iterate over each market listing page
-  for (let currentPage = 1; currentPage <= totalPages; currentPage++) {
-    try {
-      const links = await collectPageLinks(mainPage, currentPage);
-
-      for (const link of links) {
-        try {
-          const { hashName, itemId } = await scrapeItem(mainPage, link);
-          const itemLine = `${hashName},${itemId}\n`;
-          const success = writeStream.write(itemLine);
-          if (!success) console.warn('Backpressure hit while writing:', itemLine);
-        } catch (err) {
-          console.error('Error scraping item:', err);
-        }
-      }
-    } catch (err) {
-      console.error(`Failed to process page ${currentPage}:`, err);
-    }
+  // Pre-allocate your page-pool
+  const itemPages = [];
+  for (let i = 0; i < PERPAGE; i++) {
+    const p = await browser.newPage();
+    await p.setExtraHTTPHeaders({
+      Referer: 'https://steamcommunity.com/market',
+      'User-Agent': 'did it work??',
+    });
+    itemPages.push(p);
   }
+
+  let totalWritten = 0;
+
+  // Loop through each page, scrape in parallel, then write immediately
+  for (let currentPage = 1; currentPage <= totalPages; currentPage++) {
+    const links = await collectPageLinks(mainPage, currentPage);
+
+    // scrape this page’s links in parallel
+    const batch = await Promise.all(
+      links.map((link, idx) => scrapeItem(itemPages[idx], link))
+    );
+
+    // write each item as soon as we get it
+    for (const { hashName, itemId } of batch) {
+      writeStream.write(`${hashName},${itemId}\n`);
+      totalWritten++;
+    }
+
+    console.log(
+      `Finished page ${currentPage}: ` +
+      `scraped ${batch.length} items, total written so far = ${totalWritten}`
+    );
+  }
+
+  // clean up
   writeStream.end();
+  await Promise.all(itemPages.map(p => p.close()));
+  await mainPage.close();
   await browser.close();
 })();
