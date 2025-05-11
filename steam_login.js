@@ -10,7 +10,7 @@ async function getCookies() {
   const [page] = await browser.pages();
   await page.goto(
     'https://steamcommunity.com/login/home/?goto=',
-    { waitUntil: 'networkidle2' }
+    { waitUntil: 'networkidle2', timeout: 0 }
   );
 
   // read credentials
@@ -25,14 +25,14 @@ async function getCookies() {
   // click & wait for the navigation to finish
   await Promise.all([
     page.click('button[type="submit"]'),
-    page.waitForNavigation({ waitUntil: 'networkidle0' }),
+    page.waitForNavigation({ waitUntil: 'networkidle0', timeout: 0}),
   ]);
   let steamUsername = page.url().replace('https://steamcommunity.com/profiles/', '');
 
   // now go to the inventory page
   await page.goto(
     `https://steamcommunity.com/profiles/${steamUsername}/inventory/`,
-    { waitUntil: 'networkidle2' }
+    { waitUntil: 'networkidle2', timeout: 0 }
   );
 
   // small pause so everything settles

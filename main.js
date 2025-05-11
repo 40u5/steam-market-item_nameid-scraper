@@ -22,13 +22,18 @@ async function collectPageLinks(page, pageNum) {
     `&sort_column=quantity` +
     `&sort_dir=desc` +
     `&norender=1`;
+  
+  
+  const responsePromise = page.waitForResponse(
+    res => res.url().includes('/market/search/render') &&
+    res.status() === 200, { timeout: 0 }
+  );
+
 
   // hit the JSON endpoint
-  const resp = await page.goto(url, { waitUntil: 'networkidle2' });
-  const json = await resp.json();
-  if (!json.success) {
-    throw new Error(`Steam API error: ${json.tip}`);
-  }
+  await handleTooManyRequests(page, () => page.goto(url, { waitUntil: 'networkidle2', timeout: 0}));
+  let resp = await responsePromise
+  let json = await resp.json();
 
   // build array of full listing URLs
   const links = [];
@@ -39,8 +44,6 @@ async function collectPageLinks(page, pageNum) {
       `${appId}/${hashName}`;
     links.push(listingUrl);
   }
-
-  console.log(`we on page ${pageNum}: found ${links.length} items`);
   return links;
 }
 
@@ -54,11 +57,11 @@ async function scrapeItem(page, itemUrl) {
 
   // Navigate with throttling only on 429
   await handleTooManyRequests(page, () =>
-    page.goto(itemUrl)
+    page.goto(itemUrl, { timeout: 0 })
   );
 
   // Wait for the XHR containing item_nameid
-  const resp = await page.waitForResponse(r => r.url().includes('item_nameid='));
+  const resp = await page.waitForResponse(r => r.url().includes('item_nameid='), { timeout: 0 });
   const url = resp.url()
   const m = url.match(/item_nameid=(\d+)/);
   const itemId = m ? m[1] : null;
@@ -70,9 +73,9 @@ async function scrapeItem(page, itemUrl) {
 async function handleTooManyRequests(page, navigateFn) {
   let resp = await navigateFn();
   while (resp.status() === 429) {
-    console.log('[429] Cooling off 10 s and reloading …');
-    await new Promise(r => setTimeout(r, 10000));
-    resp = await page.reload({ waitUntil: 'networkidle2' });
+    console.log('[429] Cooling off 20 s and reloading …');
+    await new Promise(r => setTimeout(r, 20000));
+    resp = await page.reload({ waitUntil: 'networkidle2', timeout: 0});
   }
   return resp
 }
@@ -99,7 +102,7 @@ const writeStream = fs.createWriteStream(
                    `&search_descriptions=0&sort_column=quantity&sort_dir=desc` +
                    `&norender=1`;
   const firstResp = await handleTooManyRequests(mainPage, () =>
-    mainPage.goto(firstUrl, { waitUntil: 'networkidle2' })
+    mainPage.goto(firstUrl, { waitUntil: 'networkidle2', timeout: 0})
   );
   const firstJson = await firstResp.json();
   const totalPages = getLastPage(firstJson.total_count);
