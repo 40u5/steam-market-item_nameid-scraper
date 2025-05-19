@@ -49,19 +49,32 @@ async function collectPageLinks(page, pageNum) {
 
 /* takes a browser instance and the url of the listing, opens a new page and
 gets the item_nameid of the item, then closes the page*/
+
 async function scrapeItem(page, itemUrl) {
+  // set headers once
   await page.setExtraHTTPHeaders({
     Referer: 'https://steamcommunity.com/market',
     'User-Agent': 'did it work??',
   });
 
-  // Navigate with throttling only on 429
+  // initial navigation, with your 429 handler
   await handleTooManyRequests(page, () =>
     page.goto(itemUrl, { timeout: 0 })
   );
 
-  // Wait for the XHR containing item_nameid
-  const resp = await page.waitForResponse(r => r.url().includes('item_nameid='), { timeout: 0 });
+  let resp;
+  try {
+    // wait up to 20 s for the XHR
+    resp = await page.waitForResponse(
+      r => r.url().includes('item_nameid='), { timeout: 20_000 }
+    );
+  } catch (err) {
+      await page.reload({ waitUntil: 'networkidle2', timeout: 0 });
+      console.log("error getting item_nameid, reloading page and trying again");
+      return scrapeItem(page, itemUrl);
+  }
+
+  // extract and return
   const url = resp.url()
   const m = url.match(/item_nameid=(\d+)/);
   const itemId = m ? m[1] : null;
@@ -70,31 +83,41 @@ async function scrapeItem(page, itemUrl) {
   return { hashName, itemId };
 }
 
+
 async function handleTooManyRequests(page, navigateFn) {
   let resp = await navigateFn();
-  while (resp.status() === 429) {
-    console.log('[429] Cooling off 20 s and reloading …');
+  while (resp.status() !== 200) {
+    console.log(`[${ resp.status() }] Cooling off 20 s and reloading …`);
     await new Promise(r => setTimeout(r, 20000));
     resp = await page.reload({ waitUntil: 'networkidle2', timeout: 0});
   }
-  return resp
+  return resp;
 }
 
 // main function
-;(async () => {
+(async () => {
   const browser  = await getCookies();
   const mainPage = await browser.newPage();
   await mainPage.setExtraHTTPHeaders({
     Referer: 'https://steamcommunity.com/market',
     'User-Agent': 'did it work??',
   });
+  
+  const filePath = path.join(outputFolder, `${appId}_output.csv`);
+  const header = 'hash_name,item_nameid';
 
-  // Prepare CSV writer
-const writeStream = fs.createWriteStream(
-  path.join(outputFolder, `${appId}_output.csv`),
-  { flags: 'w' }
-);
-  writeStream.write("hash_name,item_nameid\n");
+  // Check if file exists and is empty
+  let isEmpty = true;
+  if (fs.existsSync(filePath)) {
+    const stats = fs.statSync(filePath);
+    isEmpty = stats.size === 0;
+  }
+
+  // Open in append mode and write header only if empty
+  const ws = fs.createWriteStream(filePath, { flags: 'a' });
+  if (isEmpty) {
+    ws.write(header + '\n');
+  }
 
   // Prime total_count
   const firstUrl = `https://steamcommunity.com/market/search/render/` +
@@ -121,7 +144,7 @@ const writeStream = fs.createWriteStream(
   let totalWritten = 0;
 
   // Loop through each page, scrape in parallel, then write immediately
-  for (let currentPage = 1; currentPage <= totalPages; currentPage++) {
+  for (let currentPage = 0; currentPage <= totalPages; currentPage++) {
     const links = await collectPageLinks(mainPage, currentPage);
 
     // scrape this page’s links in parallel
@@ -131,7 +154,7 @@ const writeStream = fs.createWriteStream(
 
     // write each item as soon as we get it
     for (const { hashName, itemId } of batch) {
-      writeStream.write(`${hashName},${itemId}\n`);
+      ws.write(`${hashName},${itemId}\n`);
       totalWritten++;
     }
 
@@ -142,7 +165,7 @@ const writeStream = fs.createWriteStream(
   }
 
   // clean up
-  writeStream.end();
+  ws.end();
   await Promise.all(itemPages.map(p => p.close()));
   await mainPage.close();
   await browser.close();
